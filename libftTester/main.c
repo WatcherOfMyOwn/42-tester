@@ -1,6 +1,38 @@
 #include "main.h"
 
-static int	same_bool(int a, int b) { return ((a != 0) == (b != 0)); }
+int	g_fail = 0;
+
+/* ===== malloc "pilotable" : permet de faire echouer le N-ieme malloc ===== */
+/* (actif seulement si g_arm = 1, et seulement pour les malloc appeles depuis  */
+/*  libft.a et ce testeur : link avec -Wl,--wrap=malloc)                       */
+
+static int	g_arm = 0;
+static int	g_calls = 0;
+static int	g_fail_at = 0;
+
+void	*__real_malloc(size_t n);
+void	*__wrap_malloc(size_t n)
+{
+	if (g_arm)
+	{
+		g_calls++;
+		if (g_calls == g_fail_at)
+			return (NULL);
+	}
+	return (__real_malloc(n));
+}
+
+/* copie EXACTE sur le tas : sous ASan, toute lecture/ecriture hors zone plante */
+static void	*hdup(const void *src, size_t n)
+{
+	void	*p;
+
+	p = malloc(n ? n : 1);
+	if (p && n)
+		memcpy(p, src, n);
+	return (p);
+}
+
 static int	sgn(int x) { return ((x > 0) - (x < 0)); }
 
 /* free la chaine et compare avec l'attendu */
@@ -74,7 +106,7 @@ static char	*ref_strnstr(const char *big, const char *little, size_t len)
 /*                                   CTYPE                                    */
 /* ========================================================================== */
 
-/* compare libc et ft sur tout l'intervalle valide : EOF (-1) et 0..255 */
+/* compare libc et ft sur -1..255 ; ft doit renvoyer EXACTEMENT 1 ou 0 (sujet) */
 #define CTYPE_TEST(fn) \
 static void	fn##_test(void) \
 { \
@@ -86,14 +118,14 @@ static void	fn##_test(void) \
 	i = -1; \
 	while (i <= 255) \
 	{ \
-		if (!same_bool(fn(i), ft_##fn(i)) && bad == -2) \
+		if (ft_##fn(i) != (fn(i) != 0) && bad == -2) \
 			bad = i; \
 		i++; \
 	} \
 	if (bad == -2) \
-		printf("OK (-1..255)"); \
+		printf(GREEN "OK (-1..255)" RESET); \
 	else \
-		{ printf("KO (premier ecart : c = %d)", bad); g_fail++; } \
+		{ printf(RED "KO (premier ecart : c = %d)" RESET, bad); g_fail++; } \
 	END(); \
 }
 
@@ -120,9 +152,9 @@ static void	fn##_test(void) \
 		i++; \
 	} \
 	if (bad == -2) \
-		printf("OK (-1..255)"); \
+		printf(GREEN "OK (-1..255)" RESET); \
 	else \
-		{ printf("KO (premier ecart : c = %d)", bad); g_fail++; } \
+		{ printf(RED "KO (premier ecart : c = %d)" RESET, bad); g_fail++; } \
 	END(); \
 }
 
@@ -133,16 +165,24 @@ CASE_TEST(toupper)
 /*                                 STRING UTILS                               */
 /* ========================================================================== */
 
+static void	t_strlen(const char *src)
+{
+	char	*x;
+
+	x = hdup(src, strlen(src) + 1);
+	T(strlen(x) == ft_strlen(x));
+	free(x);
+}
+
 static void	strlen_test(void)
 {
 	START("ft_strlen");
-	T(strlen("") == ft_strlen(""));
-	T(strlen("a") == ft_strlen("a"));
-	T(strlen("Bonjour") == ft_strlen("Bonjour"));
-	T(strlen("a\0b") == ft_strlen("a\0b"));
-	T(strlen("   \t\n  ") == ft_strlen("   \t\n  "));
-	T(strlen("0123456789012345678901234567890123456789")
-		== ft_strlen("0123456789012345678901234567890123456789"));
+	t_strlen("");
+	t_strlen("a");
+	t_strlen("Bonjour");
+	t_strlen("a\0b");
+	t_strlen("   \t\n  ");
+	t_strlen("0123456789012345678901234567890123456789");
 	END();
 }
 
@@ -206,20 +246,85 @@ static void	strlcat_test(void)
 	END();
 }
 
+/* ===== comparaisons libc / ft sur des copies EXACTES allouees sur le tas ===== */
+
+static void	t_strncmp(const char *a, const char *b, size_t n)
+{
+	char	*x;
+	char	*y;
+
+	x = hdup(a, strlen(a) + 1);
+	y = hdup(b, strlen(b) + 1);
+	T(sgn(strncmp(x, y, n)) == sgn(ft_strncmp(x, y, n)));
+	free(x);
+	free(y);
+}
+
+static void	t_strchr(const char *s, int c)
+{
+	char	*x;
+
+	x = hdup(s, strlen(s) + 1);
+	T(strchr(x, c) == ft_strchr(x, c));
+	free(x);
+}
+
+static void	t_strrchr(const char *s, int c)
+{
+	char	*x;
+
+	x = hdup(s, strlen(s) + 1);
+	T(strrchr(x, c) == ft_strrchr(x, c));
+	free(x);
+}
+
+static void	t_strnstr(const char *big, const char *little, size_t len)
+{
+	char	*x;
+	char	*y;
+
+	x = hdup(big, strlen(big) + 1);
+	y = hdup(little, strlen(little) + 1);
+	T(ref_strnstr(x, y, len) == ft_strnstr(x, y, len));
+	free(x);
+	free(y);
+}
+
+static void	t_memchr(const void *s, int c, size_t n)
+{
+	void	*x;
+
+	x = hdup(s, n);
+	T(memchr(x, c, n) == ft_memchr(x, c, n));
+	free(x);
+}
+
+static void	t_memcmp(const void *a, const void *b, size_t n)
+{
+	void	*x;
+	void	*y;
+
+	x = hdup(a, n);
+	y = hdup(b, n);
+	T(sgn(memcmp(x, y, n)) == sgn(ft_memcmp(x, y, n)));
+	free(x);
+	free(y);
+}
+
 static void	strncmp_test(void)
 {
 	START("ft_strncmp");
-	T(sgn(strncmp("abc", "abc", 3)) == sgn(ft_strncmp("abc", "abc", 3)));
-	T(sgn(strncmp("abc", "abd", 3)) == sgn(ft_strncmp("abc", "abd", 3)));
-	T(sgn(strncmp("abd", "abc", 3)) == sgn(ft_strncmp("abd", "abc", 3)));
-	T(sgn(strncmp("abc", "abd", 2)) == sgn(ft_strncmp("abc", "abd", 2)));
-	T(sgn(strncmp("abc", "abd", 0)) == sgn(ft_strncmp("abc", "abd", 0)));
-	T(sgn(strncmp("abc", "abcd", 10)) == sgn(ft_strncmp("abc", "abcd", 10)));
-	T(sgn(strncmp("abcd", "abc", 10)) == sgn(ft_strncmp("abcd", "abc", 10)));
-	T(sgn(strncmp("", "", 5)) == sgn(ft_strncmp("", "", 5)));
-	T(sgn(strncmp("", "a", 5)) == sgn(ft_strncmp("", "a", 5)));
-	T(sgn(strncmp("test\200", "test\0", 6)) == sgn(ft_strncmp("test\200", "test\0", 6)));
-	T(sgn(strncmp("\200", "\0", 1)) == sgn(ft_strncmp("\200", "\0", 1)));
+	t_strncmp("abc", "abc", 3);
+	t_strncmp("abc", "abd", 3);
+	t_strncmp("abd", "abc", 3);
+	t_strncmp("abc", "abd", 2);
+	t_strncmp("abc", "abd", 0);
+	t_strncmp("abc", "abcd", 10);
+	t_strncmp("abcd", "abc", 10);
+	t_strncmp("", "", 5);
+	t_strncmp("", "a", 5);
+	t_strncmp("test\200", "test\0", 6);
+	t_strncmp("\200", "\0", 1);
 	END();
 }
 
@@ -252,14 +357,14 @@ static void	strchr_test(void)
 	const char	*s = "Hello, 42 school";
 
 	START("ft_strchr");
-	T(strchr(s, 'H') == ft_strchr(s, 'H'));
-	T(strchr(s, 'l') == ft_strchr(s, 'l'));
-	T(strchr(s, 'l' + 256) == ft_strchr(s, 'l' + 256));
-	T(strchr(s, 'o') == ft_strchr(s, 'o'));
-	T(strchr(s, 'z') == ft_strchr(s, 'z'));
-	T(strchr(s, '\0') == ft_strchr(s, '\0'));
-	T(strchr("", '\0') == ft_strchr("", '\0'));
-	T(strchr("", 'a') == ft_strchr("", 'a'));
+	t_strchr(s, 'H');
+	t_strchr(s, 'l');
+	t_strchr(s, 'l' + 256);
+	t_strchr(s, 'o');
+	t_strchr(s, 'z');
+	t_strchr(s, '\0');
+	t_strchr("", '\0');
+	t_strchr("", 'a');
 	END();
 }
 
@@ -268,13 +373,13 @@ static void	strrchr_test(void)
 	const char	*s = "Hello, 42 school";
 
 	START("ft_strrchr");
-	T(strrchr(s, 'H') == ft_strrchr(s, 'H'));
-	T(strrchr(s, 'l') == ft_strrchr(s, 'l'));
-	T(strrchr(s, 'o') == ft_strrchr(s, 'o'));
-	T(strrchr(s, 'z') == ft_strrchr(s, 'z'));
-	T(strrchr(s, '\0') == ft_strrchr(s, '\0'));
-	T(strrchr("", '\0') == ft_strrchr("", '\0'));
-	T(strrchr("", 'a') == ft_strrchr("", 'a'));
+	t_strrchr(s, 'H');
+	t_strrchr(s, 'l');
+	t_strrchr(s, 'o');
+	t_strrchr(s, 'z');
+	t_strrchr(s, '\0');
+	t_strrchr("", '\0');
+	t_strrchr("", 'a');
 	END();
 }
 
@@ -283,19 +388,19 @@ static void	strnstr_test(void)
 	const char	*big = "Foo Bar Baz";
 
 	START("ft_strnstr");
-	T(ref_strnstr(big, "Bar", 11) == ft_strnstr(big, "Bar", 11));
-	T(ref_strnstr(big, "Bar", 7) == ft_strnstr(big, "Bar", 7));
-	T(ref_strnstr(big, "Bar", 6) == ft_strnstr(big, "Bar", 6));
-	T(ref_strnstr(big, "Baz", 11) == ft_strnstr(big, "Baz", 11));
-	T(ref_strnstr(big, "Baz", 10) == ft_strnstr(big, "Baz", 10));
-	T(ref_strnstr(big, "Foo", 0) == ft_strnstr(big, "Foo", 0));
-	T(ref_strnstr(big, "", 0) == ft_strnstr(big, "", 0));
-	T(ref_strnstr(big, "", 5) == ft_strnstr(big, "", 5));
-	T(ref_strnstr(big, "xyz", 11) == ft_strnstr(big, "xyz", 11));
-	T(ref_strnstr("", "a", 5) == ft_strnstr("", "a", 5));
-	T(ref_strnstr("", "", 5) == ft_strnstr("", "", 5));
-	T(ref_strnstr(big, "Foo Bar Baz Qux", 20) == ft_strnstr(big, "Foo Bar Baz Qux", 20));
-	T(ref_strnstr("aaabc", "abc", 5) == ft_strnstr("aaabc", "abc", 5));
+	t_strnstr(big, "Bar", 11);
+	t_strnstr(big, "Bar", 7);
+	t_strnstr(big, "Bar", 6);
+	t_strnstr(big, "Baz", 11);
+	t_strnstr(big, "Baz", 10);
+	t_strnstr(big, "Foo", 0);
+	t_strnstr(big, "", 0);
+	t_strnstr(big, "", 5);
+	t_strnstr(big, "xyz", 11);
+	t_strnstr("", "a", 5);
+	t_strnstr("", "", 5);
+	t_strnstr(big, "Foo Bar Baz Qux", 20);
+	t_strnstr("aaabc", "abc", 5);
 	END();
 }
 
@@ -424,29 +529,29 @@ static void	memchr_test(void)
 	const char	s[] = "Bon\0jour 42";
 
 	START("ft_memchr");
-	T(memchr(s, 'B', 11) == ft_memchr(s, 'B', 11));
-	T(memchr(s, 'o', 11) == ft_memchr(s, 'o', 11));
-	T(memchr(s, 'u', 11) == ft_memchr(s, 'u', 11));
-	T(memchr(s, 'u', 5) == ft_memchr(s, 'u', 5));
-	T(memchr(s, '\0', 11) == ft_memchr(s, '\0', 11));
-	T(memchr(s, 'B', 0) == ft_memchr(s, 'B', 0));
-	T(memchr(s, 'B' + 256, 11) == ft_memchr(s, 'B' + 256, 11));
-	T(memchr(s, 'z', 11) == ft_memchr(s, 'z', 11));
-	T(memchr(s, '2', 11) == ft_memchr(s, '2', 11));
+	t_memchr(s, 'B', 11);
+	t_memchr(s, 'o', 11);
+	t_memchr(s, 'u', 11);
+	t_memchr(s, 'u', 5);
+	t_memchr(s, '\0', 11);
+	t_memchr(s, 'B', 0);
+	t_memchr(s, 'B' + 256, 11);
+	t_memchr(s, 'z', 11);
+	t_memchr(s, '2', 11);
 	END();
 }
 
 static void	memcmp_test(void)
 {
 	START("ft_memcmp");
-	T(sgn(memcmp("abc", "abc", 3)) == sgn(ft_memcmp("abc", "abc", 3)));
-	T(sgn(memcmp("abc", "abd", 3)) == sgn(ft_memcmp("abc", "abd", 3)));
-	T(sgn(memcmp("abd", "abc", 3)) == sgn(ft_memcmp("abd", "abc", 3)));
-	T(sgn(memcmp("abc", "abd", 2)) == sgn(ft_memcmp("abc", "abd", 2)));
-	T(sgn(memcmp("abc", "xyz", 0)) == sgn(ft_memcmp("abc", "xyz", 0)));
-	T(sgn(memcmp("a\0b", "a\0c", 3)) == sgn(ft_memcmp("a\0b", "a\0c", 3)));
-	T(sgn(memcmp("\200", "\0", 1)) == sgn(ft_memcmp("\200", "\0", 1)));
-	T(sgn(memcmp("\0", "\200", 1)) == sgn(ft_memcmp("\0", "\200", 1)));
+	t_memcmp("abc", "abc", 3);
+	t_memcmp("abc", "abd", 3);
+	t_memcmp("abd", "abc", 3);
+	t_memcmp("abc", "abd", 2);
+	t_memcmp("abc", "xyz", 0);
+	t_memcmp("a\0b", "a\0c", 3);
+	t_memcmp("\200", "\0", 1);
+	t_memcmp("\0", "\200", 1);
 	END();
 }
 
@@ -477,7 +582,13 @@ static void	calloc_test(void)
 	free(q);
 	T(ft_calloc(SIZE_MAX, 2) == NULL);
 	q = ft_calloc(0, 0);
-	T(1);
+	T(q != NULL);
+	free(q);
+	q = ft_calloc(0, 4);
+	T(q != NULL);
+	free(q);
+	q = ft_calloc(4, 0);
+	T(q != NULL);
 	free(q);
 	END();
 }
@@ -497,6 +608,9 @@ static void	substr_test(void)
 	T(streq_free(ft_substr("hello", 10, 3), ""));
 	T(streq_free(ft_substr("hello", 2, 0), ""));
 	T(streq_free(ft_substr("", 0, 5), ""));
+	T(streq_free(ft_substr("hello", 1, SIZE_MAX), "ello"));
+	T(streq_free(ft_substr("hello", UINT_MAX, 3), ""));
+	T(streq_free(ft_substr("hello", 0, SIZE_MAX), "hello"));
 	END();
 }
 
@@ -507,9 +621,6 @@ static void	strjoin_test(void)
 	T(streq_free(ft_strjoin("", ""), ""));
 	T(streq_free(ft_strjoin("a", ""), "a"));
 	T(streq_free(ft_strjoin("", "b"), "b"));
-	T(ft_strjoin(NULL, "b") == NULL);
-	T(ft_strjoin("abc", NULL) == NULL);
-	T(ft_strjoin(NULL, NULL) == NULL);
 	T(streq_free(ft_strjoin("Hello ", "42"), "Hello 42"));
 	END();
 }
@@ -914,8 +1025,6 @@ static void	lstiter_test(void)
 	ft_lstiter(lst, f_iter_upper);
 	T(strcmp((char *)lst->content, "ABC") == 0);
 	T(strcmp((char *)lst->next->content, "DEF") == 0);
-	ft_lstiter(NULL, f_iter_upper);
-	T(1);
 	ft_lstclear(&lst, del_free);
 	END();
 }
@@ -939,9 +1048,386 @@ static void	lstmap_test(void)
 	T(m != lst);
 	ft_lstclear(&m, del_free);
 	ft_lstclear(&lst, del_free);
-	T(ft_lstmap(NULL, f_dup_upper, del_free) == NULL);
 	(void)del_noop;
 	END();
+}
+
+/* ========================================================================== */
+/*                  ECHECS DE MALLOC (retour NULL + pas de fuite)             */
+/* ========================================================================== */
+
+static void	cl_free(void *p)
+{
+	free(p);
+}
+
+static void	cl_tab(void *p)
+{
+	char	**t;
+	size_t	i;
+
+	t = (char **)p;
+	if (!t)
+		return ;
+	i = 0;
+	while (t[i])
+		free(t[i++]);
+	free(t);
+}
+
+/* Compte d'abord les malloc d'un appel reussi (n), puis refait l'appel en    */
+/* faisant echouer le 1er, le 2e, ... le n-ieme malloc : on doit toujours     */
+/* obtenir NULL. Les fuites eventuelles se voient avec `make asan` ou `make vg`*/
+#define MFAIL(label, expr, cleanup) \
+do { \
+	int		n_; \
+	int		k_; \
+	void	*r_; \
+	START(label); \
+	g_fail_at = 0; \
+	g_calls = 0; \
+	g_arm = 1; \
+	cleanup((void *)(expr)); \
+	g_arm = 0; \
+	n_ = g_calls; \
+	T(n_ > 0); \
+	k_ = 1; \
+	while (k_ <= n_) \
+	{ \
+		g_fail_at = k_; \
+		g_calls = 0; \
+		g_arm = 1; \
+		r_ = (void *)(expr); \
+		g_arm = 0; \
+		T(r_ == NULL); \
+		cleanup(r_); \
+		k_++; \
+	} \
+	g_fail_at = 0; \
+	END(); \
+} while (0)
+
+static int	g_f_calls = 0;
+
+static void	*f_dup_count(void *c)
+{
+	g_f_calls++;
+	return (strdup((char *)c));
+}
+
+static void	lstmap_fail_test(void)
+{
+	t_list	*lst;
+	t_list	*m;
+	int		n;
+	int		k;
+
+	START("ft_lstmap (KO)");
+	lst = NULL;
+	ft_lstadd_back(&lst, ft_lstnew(strdup("abc")));
+	ft_lstadd_back(&lst, ft_lstnew(strdup("def")));
+	ft_lstadd_back(&lst, ft_lstnew(strdup("ghi")));
+	g_fail_at = 0;
+	g_calls = 0;
+	g_arm = 1;
+	m = ft_lstmap(lst, f_dup_count, del_free);
+	g_arm = 0;
+	n = g_calls;
+	ft_lstclear(&m, del_free);
+	k = 1;
+	while (k <= n)
+	{
+		g_f_calls = 0;
+		g_del_count = 0;
+		g_fail_at = k;
+		g_calls = 0;
+		g_arm = 1;
+		m = ft_lstmap(lst, f_dup_count, del_free);
+		g_arm = 0;
+		T(m == NULL);
+		/* chaque contenu cree par f doit avoir ete detruit par del */
+		T(g_f_calls == g_del_count);
+		k++;
+	}
+	g_fail_at = 0;
+	ft_lstclear(&lst, del_free);
+	END();
+}
+
+static void	malloc_fail_test(void)
+{
+	MFAIL("ft_strdup (KO)", ft_strdup("hello"), cl_free);
+	MFAIL("ft_substr (KO)", ft_substr("hello", 1, 3), cl_free);
+	MFAIL("ft_strjoin (KO)", ft_strjoin("foo", "bar"), cl_free);
+	MFAIL("ft_strtrim (KO)", ft_strtrim("  abc  ", " "), cl_free);
+	MFAIL("ft_split (KO)", ft_split("a bc d", ' '), cl_tab);
+	MFAIL("ft_itoa (KO)", ft_itoa(-42), cl_free);
+	MFAIL("ft_strmapi (KO)", ft_strmapi("abc", f_mapi), cl_free);
+	MFAIL("ft_calloc (KO)", ft_calloc(4, 4), cl_free);
+	MFAIL("ft_lstnew (KO)", ft_lstnew("x"), cl_free);
+	lstmap_fail_test();
+}
+
+/* ========================================================================== */
+/*          CAS LIMITES / NULL : chaque cas tourne dans un processus fils     */
+/* ========================================================================== */
+
+/* 1 si fn se termine normalement, 0 si elle plante (segfault, ASan...).      */
+/* Avec ASan, un crash sort avec un code != 0 au lieu d'un signal.            */
+static int  survives(void (*fn)(void))
+{
+    pid_t   pid;
+    int     status;
+
+    fflush(NULL);
+    pid = fork();
+    if (pid == 0)
+    {
+        dup2(open("/dev/null", O_WRONLY), 2);
+        fn();
+        _exit(0);
+    }
+    waitpid(pid, &status, 0);
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+/* cas VALIDES (liste vide, taille extreme, fd invalide...) : ne doivent pas planter */
+static void must_survive(const char *name, void (*fn)(void))
+{
+    int ok;
+
+    ok = survives(fn);
+    printf("  %-34s %s\n", name, ok ? GREEN "OK" RESET : RED "KO (CRASH)" RESET);
+    if (!ok)
+        g_fail++;
+}
+
+/* cas NON DEFINIS : on compare avec la libc quand elle existe. Si la libc    */
+/* plante aussi, c'est un UB : rien n'est exige. Ce n'est jamais compte en KO */
+/* sauf si la libc survit et pas toi.                                         */
+static void info(const char *name, void (*libc)(void), void (*ft)(void))
+{
+    int l;
+    int f;
+
+    f = survives(ft);
+    if (!libc)
+    {
+        printf("  %-34s ft: %-6s " YELLOW " (undefined by the subject) " RESET "\n", name, f ? GREEN "OK" RESET : ORANGE "CRASH" RESET);
+        return ;
+    }
+    l = survives(libc);
+    printf("  %-34s libc: %-6s ft: %-6s %s\n", name, l ? GREEN "OK" RESET : ORANGE "CRASH" RESET,
+        f ? GREEN "OK" RESET : ORANGE "CRASH" RESET, !l ? YELLOW "(UB : nothing required)" RESET : f ? "" : ORANGE "<- COULD BE FIX" RESET);
+}
+
+static void del_nop(void *c) { (void)c; }
+static void f_nop(void *c) { (void)c; }
+static void *f_id(void *c) { return (c); }
+static char f_mapi_id(unsigned int i, char c) { (void)i; return (c); }
+static void f_iteri_nop(unsigned int i, char *c) { (void)i; (void)c; }
+
+static void free_tab(char **tab)
+{
+    int i = 0;
+    if (!tab)
+        return;
+    while (tab[i])
+        free(tab[i++]);
+    free(tab);
+}
+
+/* --- cas valides --- */
+static void v_lstsize_null(void) { ft_lstsize(NULL); }
+static void v_lstlast_null(void) { ft_lstlast(NULL); }
+static void v_lstiter_null(void) { ft_lstiter(NULL, f_nop); }
+static void v_lstmap_null(void) { ft_lstmap(NULL, f_id, del_nop); }
+static void v_lstadd_back_empty(void)
+{
+    t_list  *l;
+
+    l = NULL;
+    ft_lstadd_back(&l, ft_lstnew(NULL));
+	ft_lstclear(&l, del_nop);
+}
+static void v_lstadd_front_empty(void)
+{
+    t_list  *l;
+
+    l = NULL;
+    ft_lstadd_front(&l, ft_lstnew(NULL));
+	ft_lstclear(&l, del_nop);
+}
+static void v_lstclear_empty(void)
+{
+    t_list  *l;
+
+    l = NULL;
+    ft_lstclear(&l, del_nop);
+}
+static void v_putchar_badfd(void) { ft_putchar_fd('a', -1); }
+static void v_putstr_badfd(void) { ft_putstr_fd("abc", -1); }
+static void v_putendl_badfd(void) { ft_putendl_fd("abc", -1); }
+static void v_putnbr_badfd(void) { ft_putnbr_fd(INT_MIN, -1); }
+static void v_substr_huge(void) { free(ft_substr("hello", 1, SIZE_MAX)); }
+static void v_substr_hugestart(void) { free(ft_substr("hello", UINT_MAX, 3)); }
+static void v_calloc_zero_0(void) { free(ft_calloc(0, 0)); }
+static void v_calloc_zero_1(void) { free(ft_calloc(0, 42)); }
+static void v_calloc_zero_2(void) { free(ft_calloc(42, 0)); }
+static void v_itoa_intmin(void) { free(ft_itoa(INT_MIN)); }
+static void v_split_empty(void) { free_tab(ft_split("", ' ')); }
+static void v_split_spaces(void) { free_tab(ft_split("   ", ' ')); }
+static void v_split_consec(void) { free_tab(ft_split("a,,b", ',')); }
+
+/* --- cas non definis --- */
+static void u_strdup_null(void) { free(ft_strdup(NULL)); }
+static void u_strlen_null(void) { volatile size_t r = ft_strlen(NULL); (void)r; }
+static void u_atoi_null(void) { volatile int r = ft_atoi(NULL); (void)r; }
+static void l_memset_null_0(void)   { void *p = NULL; size_t n = 0; volatile void *r = memset(p, 'a', n); (void)r; }
+static void u_memset_null_0(void)   { void *p = NULL; size_t n = 0; volatile void *r = ft_memset(p, 'a', n); (void)r; }
+static void l_memset_null_n(void)   { void *p = NULL; size_t n = 5; volatile void *r = memset(p, 'a', n); (void)r; }
+static void u_memset_null_n(void)   { void *p = NULL; size_t n = 5; volatile void *r = ft_memset(p, 'a', n); (void)r; }
+static void l_memset_null_max(void) { void *p = NULL; size_t n = SIZE_MAX; volatile void *r = memset(p, 'a', n >> 1); (void)r; }
+static void u_memset_null_max(void) { void *p = NULL; size_t n = SIZE_MAX; volatile void *r = ft_memset(p, 'a', n >> 1); (void)r; }
+static void l_bzero_null_0(void)   { void *p = NULL; size_t n = 0; bzero(p, n); }
+static void u_bzero_null_0(void)   { void *p = NULL; size_t n = 0; ft_bzero(p, n); }
+static void l_bzero_null_n(void)   { void *p = NULL; size_t n = 5; bzero(p, n); }
+static void u_bzero_null_n(void)   { void *p = NULL; size_t n = 5; ft_bzero(p, n); }
+static void l_bzero_null_max(void) { void *p = NULL; size_t n = SIZE_MAX; bzero(p, n >> 1); }
+static void u_bzero_null_max(void) { void *p = NULL; size_t n = SIZE_MAX; ft_bzero(p, n >> 1); }
+static void l_memcpy_null_0(void)   { void *p = NULL; void *q = NULL; size_t n = 0; volatile void *r = memcpy(p, q, n); (void)r; }
+static void u_memcpy_null_0(void)   { void *p = NULL; void *q = NULL; size_t n = 0; volatile void *r = ft_memcpy(p, q, n); (void)r; }
+static void l_memcpy_null_n(void)   { void *p = NULL; void *q = NULL; size_t n = 5; volatile void *r = memcpy(p, q, n); (void)r; }
+static void u_memcpy_null_n(void)   { void *p = NULL; void *q = NULL; size_t n = 5; volatile void *r = ft_memcpy(p, q, n); (void)r; }
+static void l_memcpy_null_max(void) { void *p = NULL; void *q = NULL; size_t n = SIZE_MAX; volatile void *r = memcpy(p, q, n >> 1); (void)r; }
+static void u_memcpy_null_max(void) { void *p = NULL; void *q = NULL; size_t n = SIZE_MAX; volatile void *r = ft_memcpy(p, q, n >> 1); (void)r; }
+static void l_memmove_null_0(void)   { void *p = NULL; size_t n = 0; volatile void *r = memmove(p, p, n); (void)r; }
+static void u_memmove_null_0(void)   { void *p = NULL; size_t n = 0; volatile void *r = ft_memmove(p, p, n); (void)r; }
+static void l_memmove_null_n(void)   { void *p = NULL; size_t n = 5; volatile void *r = memmove(p, p, n); (void)r; }
+static void u_memmove_null_n(void)   { void *p = NULL; size_t n = 5; volatile void *r = ft_memmove(p, p, n); (void)r; }
+static void l_memmove_null_max(void) { void *p = NULL; size_t n = SIZE_MAX; volatile void *r = memmove(p, p, n >> 1); (void)r; }
+static void u_memmove_null_max(void) { void *p = NULL; size_t n = SIZE_MAX; volatile void *r = ft_memmove(p, p, n >> 1); (void)r; }
+static void l_memchr_null_0(void)   { void *p = NULL; size_t n = 0; volatile void *r = memchr(p, 'a', n); (void)r; }
+static void u_memchr_null_0(void)   { const void *p = NULL; size_t n = 0; volatile void *r = ft_memchr(p, 'a', n); (void)r; }
+static void l_memchr_null_n(void)   { void *p = NULL; size_t n = 5; volatile void *r = memchr(p, 'a', n); (void)r; }
+static void u_memchr_null_n(void)   { const void *p = NULL; size_t n = 5; volatile void *r = ft_memchr(p, 'a', n); (void)r; }
+static void l_memchr_null_max(void) { void *p = NULL; size_t n = SIZE_MAX; volatile void *r = memchr(p, 'a', n); (void)r; }
+static void u_memchr_null_max(void) { const void *p = NULL; size_t n = SIZE_MAX; volatile void *r = ft_memchr(p, 'a', n); (void)r; }
+static void l_memcmp_null_0(void)   { void *p = NULL; size_t n = 0; volatile int r = memcmp(p, p, n); (void)r; }
+static void u_memcmp_null_0(void)   { const void *p = NULL; size_t n = 0; volatile int r = ft_memcmp(p, p, n); (void)r; }
+static void l_memcmp_null_n(void)   { void *p = NULL; size_t n = 5; volatile int r = memcmp(p, p, n); (void)r; }
+static void u_memcmp_null_n(void)   { const void *p = NULL; size_t n = 5; volatile int r = ft_memcmp(p, p, n); (void)r; }
+static void l_memcmp_null_max(void) { void *p = NULL; size_t n = SIZE_MAX; volatile int r = memcmp(p, p, n); (void)r; }
+static void u_memcmp_null_max(void) { const void *p = NULL; size_t n = SIZE_MAX; volatile int r = ft_memcmp(p, p, n); (void)r; }
+static void l_strdup_null(void) { const char *volatile p = NULL; free(strdup(p)); }
+static void l_strlen_null(void) { const char *volatile p = NULL; volatile size_t r = strlen(p); (void)r; }
+static void l_atoi_null(void) { const char *volatile p = NULL; volatile int r = atoi(p); (void)r; }
+static void u_substr_null(void) { free(ft_substr(NULL, 0, 3)); }
+static void u_strjoin_null1(void) { free(ft_strjoin(NULL, "b")); }
+static void u_strjoin_null2(void) { free(ft_strjoin("a", NULL)); }
+static void u_strtrim_null1(void) { free(ft_strtrim(NULL, "x")); }
+static void u_strtrim_null2(void) { free(ft_strtrim("x", NULL)); }
+static void u_split_null(void) { free_tab(ft_split(NULL, ' ')); }
+static void u_strmapi_null1(void) { free(ft_strmapi(NULL, f_mapi_id)); }
+static void u_strmapi_null2(void) { free(ft_strmapi("abc", NULL)); }
+static void u_striteri_null1(void) { ft_striteri(NULL, f_iteri_nop); }
+static void u_striteri_null2(void) { char s[] = "abc"; ft_striteri(s, NULL); }
+static void u_putstr_null(void) { ft_putstr_fd(NULL, 1); }
+static void u_putendl_null(void) { ft_putendl_fd(NULL, 1); }
+static void u_lstadd_back_null(void) { 
+    t_list *node = ft_lstnew(NULL);
+    ft_lstadd_back(NULL, node); 
+    free(node);
+}
+static void u_lstadd_front_null(void) { 
+    t_list *node = ft_lstnew(NULL);
+    ft_lstadd_front(NULL, node); 
+    free(node);
+}
+static void u_lstdelone_null(void) { ft_lstdelone(NULL, del_nop); }
+static void u_lstclear_null(void) { ft_lstclear(NULL, del_nop); }
+
+static void edge_cases(void)
+{
+    /* Calloc & Itoa */
+    must_survive("ft_calloc(0, 0)", v_calloc_zero_0);
+    must_survive("ft_calloc(0, 42)", v_calloc_zero_1);
+    must_survive("ft_calloc(42, 0)", v_calloc_zero_2);
+    must_survive("ft_itoa(INT_MIN)", v_itoa_intmin);
+
+    /* Substr (Tailles extrêmes) */
+    must_survive("ft_substr(s, 1, SIZE_MAX)", v_substr_huge);
+    must_survive("ft_substr(s, UINT_MAX, 3)", v_substr_hugestart);
+
+    /* FD Invalides */
+    must_survive("ft_putchar_fd(fd = -1)", v_putchar_badfd);
+    must_survive("ft_putstr_fd(\"abc\", fd = -1)", v_putstr_badfd);
+    must_survive("ft_putendl_fd(\"abc\", fd = -1)", v_putendl_badfd);
+    must_survive("ft_putnbr_fd(INT_MIN, fd = -1)", v_putnbr_badfd);
+
+    /* Listes (Cas limites valides) */
+    must_survive("ft_lstsize(NULL)", v_lstsize_null);
+    must_survive("ft_lstlast(NULL)", v_lstlast_null);
+    must_survive("ft_lstiter(NULL, f)", v_lstiter_null);
+    must_survive("ft_lstmap(NULL, f, del)", v_lstmap_null);
+    must_survive("ft_lstadd_back(&vide, new)", v_lstadd_back_empty);
+    must_survive("ft_lstadd_front(&vide, new)", v_lstadd_front_empty);
+    must_survive("ft_lstclear(&vide, del)", v_lstclear_empty);
+}
+
+static void undefined_cases(void)
+{
+    /* Partie 1 : Libc (Chaînes & Conversions NULL) */
+	info("strdup(NULL)", l_strdup_null, u_strdup_null);
+	info("strlen(NULL)", l_strlen_null, u_strlen_null);
+	info("atoi(NULL)", l_atoi_null, u_atoi_null);
+
+    /* Partie 1 : Libc (Fonctions Mémoire NULL avec n = 0) */
+	info("memset(NULL, 'a', 0)", l_memset_null_0, u_memset_null_0);
+	info("memset(NULL, 'a', 5)", l_memset_null_n, u_memset_null_n);
+	info("memset(NULL, 'a', SIZE_MAX)", l_memset_null_max, u_memset_null_max);
+	info("bzero(NULL, 0)", l_bzero_null_0, u_bzero_null_0);
+	info("bzero(NULL, 5)", l_bzero_null_n, u_bzero_null_n);
+	info("bzero(NULL, SIZE_MAX)", l_bzero_null_max, u_bzero_null_max);
+	info("memcpy(NULL, NULL, 0)", l_memcpy_null_0, u_memcpy_null_0);
+	info("memcpy(NULL, NULL, 5)", l_memcpy_null_n, u_memcpy_null_n);
+	info("memcpy(NULL, NULL, SIZE_MAX)", l_memcpy_null_max, u_memcpy_null_max);
+	info("memmove(NULL, NULL, 0)", l_memmove_null_0, u_memmove_null_0);
+	info("memmove(NULL, NULL, 5)", l_memmove_null_n, u_memmove_null_n);
+	info("memmove(NULL, NULL, SIZE_MAX)", l_memmove_null_max, u_memmove_null_max);
+	info("memchr(NULL, 'a', 0)", l_memchr_null_0, u_memchr_null_0);
+	info("memchr(NULL, 'a', 5)", l_memchr_null_n, u_memchr_null_n);
+	info("memchr(NULL, 'a', SIZE_MAX)", l_memchr_null_max, u_memchr_null_max);
+	info("memcmp(NULL, NULL, 0)", l_memcmp_null_0, u_memcmp_null_0);
+	info("memcmp(NULL, NULL, 5)", l_memcmp_null_n, u_memcmp_null_n);
+	info("memcmp(NULL, NULL, SIZE_MAX)", l_memcmp_null_max, u_memcmp_null_max);
+
+	/* Partie 2 : Manipulation de chaînes NULL */
+	info("ft_substr(NULL, 0, 3)", NULL, u_substr_null);
+	info("ft_strjoin(NULL, \"b\")", NULL, u_strjoin_null1);
+	info("ft_strjoin(\"a\", NULL)", NULL, u_strjoin_null2);
+	info("ft_strtrim(NULL, \"x\")", NULL, u_strtrim_null1);
+	info("ft_strtrim(\"x\", NULL)", NULL, u_strtrim_null2);
+	info("ft_strmapi(NULL, f)", NULL, u_strmapi_null1);
+	info("ft_strmapi(s, NULL)", NULL, u_strmapi_null2);
+	info("ft_striteri(NULL, f)", NULL, u_striteri_null1);
+	info("ft_striteri(s, NULL)", NULL, u_striteri_null2);
+
+	/* Partie 2 : Split */
+	info("ft_split(NULL, ' ')", NULL, u_split_null);
+	info("ft_split(\"\", ' ')", NULL, v_split_empty);
+	info("ft_split(\"   \", ' ')", NULL, v_split_spaces);
+	info("ft_split(\"a,,b\", ',')", NULL, v_split_consec);
+
+	/* Partie 2 : FD NULL */
+	info("ft_putstr_fd(NULL, 1)", NULL, u_putstr_null);
+	info("ft_putendl_fd(NULL, 1)", NULL, u_putendl_null);
+
+	/* Partie 3 : Listes NULL */
+	info("ft_lstadd_back(NULL, new)", NULL, u_lstadd_back_null);
+	info("ft_lstadd_front(NULL, new)", NULL, u_lstadd_front_null);
+	info("ft_lstdelone(NULL, del)", NULL, u_lstdelone_null);
+	info("ft_lstclear(NULL, del)", NULL, u_lstclear_null);
 }
 
 /* ========================================================================== */
@@ -950,7 +1436,7 @@ static void	lstmap_test(void)
 
 int	main(void)
 {
-	printf("\n===== PARTIE 1 : LIBC =====\n");
+	printf(CYAN BOLD "\n===== PART 1 : LIBC =====\n" RESET);
 	isalpha_test();
 	isdigit_test();
 	isalnum_test();
@@ -974,7 +1460,7 @@ int	main(void)
 	memchr_test();
 	memcmp_test();
 	calloc_test();
-	printf("\n===== PARTIE 2 : FONCTIONS ADDITIONNELLES =====\n");
+	printf(CYAN BOLD "\n===== PART 2 : ADDITIONAL FUNCTIONS =====\n" RESET);
 	substr_test();
 	strjoin_test();
 	strtrim_test();
@@ -986,7 +1472,7 @@ int	main(void)
 	putstr_fd_test();
 	putendl_fd_test();
 	putnbr_fd_test();
-	printf("\n===== BONUS : LISTES CHAINEES =====\n");
+	printf(CYAN BOLD "\n===== PART 3 : LINKED LISTS =====\n" RESET);
 	lstnew_test();
 	lstadd_front_test();
 	lstsize_test();
@@ -996,7 +1482,13 @@ int	main(void)
 	lstclear_test();
 	lstiter_test();
 	lstmap_test();
-	printf("\n%s (%d test(s) en echec)\n\n",
-		g_fail ? "RESULTAT : KO" : "RESULTAT : TOUT EST OK", g_fail);
+	printf(CYAN BOLD "\n===== MALLOC FAILURES (NULL return; for leaks: make asan / make vg) =====\n" RESET);
+	malloc_fail_test();
+	printf(CYAN BOLD "\n===== EDGE CASES : should not crash =====\n" RESET);
+	edge_cases();
+	printf(CYAN BOLD "\n===== UNDEFINED BEHAVIOUR : indicative, nothing is required =====\n" RESET);
+	undefined_cases();
+	printf("\n%s " CYAN "(%d tests failure)\n\n" RESET,
+		g_fail ? BOLD "RESULT : " RED "KO" RESET : BOLD "RESULT : " GREEN "ALL GOOD" RESET, g_fail);
 	return (g_fail != 0);
 }
