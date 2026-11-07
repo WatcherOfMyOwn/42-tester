@@ -37,7 +37,7 @@ Pour les tests plus approfondis de malloc, il va falloir utiliser valgrind ou AS
   make vg
   ```
   * **Ce qu'il fait :** Lance le testeur sous *Valgrind* pour traquer les fuites (`malloc` sans `free`) et les variables non initialisées.
-  * **valgrind.log:** Le testeur gère automatiquement les rapports de processus (`fork`) et nettoie les logs propres. S'il y a un vrai problème, il conservera un fichier **`valgrind.log`** à la racine pour que tu puisses analyser l'erreur en détail.
+  * **valgrind_*.log:** Le testeur gère automatiquement les rapports de processus (`fork`) et nettoie les logs propres. S'il y a un vrai problème, il conservera des fichier **`valgrind_.log`** à la racine pour que tu puisses analyser l'erreur en détail.
 
 * **Lancer les tests avec AddressSanitizer & UBSan** :
   ```bash
