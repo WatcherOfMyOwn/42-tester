@@ -1,4 +1,6 @@
-# libft-tester
+# 42-tester
+
+### **Ne contient pour l'instant que libft-tester**
 
 Un tester plus ou moins développé pour le projet **libft** de l'école 42 (promo 2026). gère les (`malloc`) et l'analyse des comportements indéfinis (*Undefined Behavior*).
 
