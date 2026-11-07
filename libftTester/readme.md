@@ -63,4 +63,4 @@ Je conseille personnellement d'utiliser asan puis vg pour être sur à la fin.
 
 ## Auteur
 
-Développé par **Watcher of my Own ■■** et mon ami claude.
+Développé par **Watcher of my Own ■■** et mon cher ami claude.
